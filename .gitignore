@@ -1,0 +1,116 @@
+# =========================
+# Environment / secrets
+# =========================
+
+.env
+.env.*
+!.env.example
+
+# Если будут локальные конфиги с секретами
+*.local
+
+
+# =========================
+# Go build artifacts
+# =========================
+
+/bin/
+/build/
+/dist/
+/tmp/
+/temp/
+
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Если собираешь бинарник в корень проекта
+/photo-service-backend
+
+
+# =========================
+# Go tooling
+# =========================
+
+/vendor/
+
+# coverage
+coverage.out
+coverage.html
+*.cover
+*.coverage
+
+
+# =========================
+# Logs
+# =========================
+
+*.log
+logs/
+
+
+# =========================
+# Database dumps / backups
+# =========================
+
+*.dump
+*.backup
+*.bak
+*.tar
+*.tar.gz
+
+# Лучше не игнорировать все *.sql глобально,
+# потому что SQL-миграции/DDL могут быть частью проекта.
+# Если нужны дампы SQL — клади их в db-dumps/ или backups/
+db-dumps/
+backups/
+
+
+# =========================
+# MinIO / local storage data
+# =========================
+
+.minio/
+minio-data/
+data/
+
+
+# =========================
+# Uploaded/generated files
+# =========================
+
+uploads/
+generated/
+processed/
+derived/
+originals/
+
+
+# =========================
+# OS files
+# =========================
+
+.DS_Store
+Thumbs.db
+
+
+# =========================
+# IDE / editors
+# =========================
+
+.vscode/
+.idea/
+*.swp
+*.swo
+
+
+# =========================
+# Docker local overrides
+# =========================
+
+docker-compose.override.yml
+docker-compose.local.yml
