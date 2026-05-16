@@ -22,6 +22,20 @@ func NewAuthMiddleware(tm *auth.TokenManager, users user.UserRepository) *AuthMi
 	return &AuthMiddleware{tm: tm, users: users}
 }
 
+func CurrentUser(c *gin.Context) (*user.User, bool) {
+	val, ok := c.Get(CurrentUserKey)
+	if !ok {
+		return nil, false
+	}
+
+	u, ok := val.(*user.User)
+	if !ok {
+		return nil, false
+	}
+
+	return u, true
+}
+
 func (m *AuthMiddleware) RequireAuth() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		h := c.GetHeader("Authorization")

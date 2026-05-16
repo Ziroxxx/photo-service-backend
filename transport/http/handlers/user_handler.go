@@ -6,6 +6,8 @@ import (
 
 	"photo-service-back/domain/user"
 
+	"photo-service-back/transport/http/middleware"
+
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 )
@@ -41,6 +43,17 @@ func (h *UserHandler) PatchRole(c *gin.Context) {
 		return
 	}
 
+	currentUser, ok := middleware.CurrentUser(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+
+	if id == currentUser.ID {
+		c.JSON(http.StatusForbidden, gin.H{"error": "cannot change yourself"})
+		return
+	}
+
 	var req user.PatchRoleRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -64,6 +77,17 @@ func (h *UserHandler) PatchStatus(c *gin.Context) {
 	id, err := uuid.Parse(c.Param("id"))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid user id"})
+		return
+	}
+
+	currentUser, ok := middleware.CurrentUser(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+
+	if id == currentUser.ID {
+		c.JSON(http.StatusForbidden, gin.H{"error": "cannot change yourself"})
 		return
 	}
 
