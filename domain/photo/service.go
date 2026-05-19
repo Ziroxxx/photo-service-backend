@@ -670,33 +670,52 @@ func (s *Service) processBibRecognition(photoID uuid.UUID, fileName, bucket, obj
 
 	switch result.Status {
 	case BibRecognitionStatusCompleted:
-		if result.Bib == nil {
+		if len(result.Bibs) == 0 {
 			_ = s.repo.UpdateBibRecognitionStatus(ctx, photoID, BibRecognitionStatusNotFound, nil)
 			return
 		}
 
-		bibValue := strings.TrimSpace(*result.Bib)
-		if bibValue == "" {
+		var primaryBib *string
+		addedOrExistingCount := 0
+
+		for _, recognizedBib := range result.Bibs {
+			bibValue := strings.TrimSpace(recognizedBib.Bib)
+			if bibValue == "" {
+				continue
+			}
+
+			normalized := normalizeBib(bibValue)
+			if normalized == "" {
+				continue
+			}
+
+			_, err := s.repo.AddPhotoBib(ctx, &PhotoBib{
+				PhotoID:       photoID,
+				BibValue:      bibValue,
+				NormalizedBib: normalized,
+				Source:        BibSourceOCR,
+				Confidence:    recognizedBib.Confidence,
+			})
+			if err != nil && !errors.Is(err, ErrPhotoBibAlreadyExists) {
+				msg := err.Error()
+				_ = s.repo.UpdateBibRecognitionStatus(ctx, photoID, BibRecognitionStatusFailed, &msg)
+				return
+			}
+
+			addedOrExistingCount++
+
+			if primaryBib == nil {
+				value := bibValue
+				primaryBib = &value
+			}
+		}
+
+		if addedOrExistingCount == 0 || primaryBib == nil {
 			_ = s.repo.UpdateBibRecognitionStatus(ctx, photoID, BibRecognitionStatusNotFound, nil)
 			return
 		}
 
-		normalized := normalizeBib(bibValue)
-
-		_, err := s.repo.AddPhotoBib(ctx, &PhotoBib{
-			PhotoID:       photoID,
-			BibValue:      bibValue,
-			NormalizedBib: normalized,
-			Source:        BibSourceOCR,
-			Confidence:    result.Confidence,
-		})
-		if err != nil && !errors.Is(err, ErrPhotoBibAlreadyExists) {
-			msg := err.Error()
-			_ = s.repo.UpdateBibRecognitionStatus(ctx, photoID, BibRecognitionStatusFailed, &msg)
-			return
-		}
-
-		_ = s.repo.SetPrimaryBib(ctx, photoID, &bibValue)
+		_ = s.repo.SetPrimaryBib(ctx, photoID, primaryBib)
 		_ = s.repo.UpdateBibRecognitionStatus(ctx, photoID, BibRecognitionStatusCompleted, nil)
 
 	case BibRecognitionStatusNotFound:

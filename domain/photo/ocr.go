@@ -5,11 +5,22 @@ import (
 	"io"
 )
 
+type RecognizedBib struct {
+	Bib        string   `json:"bib"`
+	Confidence *float64 `json:"confidence,omitempty"`
+}
+
 type BibRecognitionResult struct {
-	Status     BibRecognitionStatus
-	Bib        *string
-	Confidence *float64
-	Error      *string
+	Status BibRecognitionStatus `json:"status"`
+
+	// Старый формат: один номер.
+	Bib        *string  `json:"bib,omitempty"`
+	Confidence *float64 `json:"confidence,omitempty"`
+
+	// Новый формат: несколько номеров.
+	Bibs []RecognizedBib `json:"bibs,omitempty"`
+
+	Error *string `json:"error,omitempty"`
 }
 
 type BibRecognizer interface {
