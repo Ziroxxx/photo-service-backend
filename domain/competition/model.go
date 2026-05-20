@@ -47,7 +47,8 @@ type Stage struct {
 	CompetitionID uuid.UUID `json:"competitionId"`
 	Name          string    `json:"name"`
 	SortOrder     int       `json:"sortOrder"`
-	StageDate     *string   `json:"stageDate,omitempty"`
+	StageDate     string    `json:"stageDate,omitempty"`
+	StageEndDate  string    `json:"stageEndDate"`
 	IsActive      bool      `json:"isActive"`
 	CreatedAt     time.Time `json:"createdAt"`
 	UpdatedAt     time.Time `json:"updatedAt"`

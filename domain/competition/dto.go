@@ -41,15 +41,17 @@ type UpdateCompetitionRequest struct {
 }
 
 type CreateStageRequest struct {
-	Name      string  `json:"name"`
-	SortOrder int     `json:"sortOrder"`
-	StageDate *string `json:"stageDate,omitempty"`
-	IsActive  *bool   `json:"isActive,omitempty"`
+	Name         string `json:"name"`
+	SortOrder    int    `json:"sortOrder"`
+	StageDate    string `json:"stageDate,omitempty" binding:"required"`
+	StageEndDate string `json:"stageEndDate" binding:"required"`
+	IsActive     *bool  `json:"isActive,omitempty"`
 }
 
 type UpdateStageRequest struct {
-	Name      *string `json:"name,omitempty"`
-	SortOrder *int    `json:"sortOrder,omitempty"`
-	StageDate *string `json:"stageDate,omitempty"`
-	IsActive  *bool   `json:"isActive,omitempty"`
+	Name         *string `json:"name,omitempty"`
+	SortOrder    *int    `json:"sortOrder,omitempty"`
+	StageDate    *string `json:"stageDate,omitempty"`
+	StageEndDate *string `json:"stageEndDate" omitempty"`
+	IsActive     *bool   `json:"isActive,omitempty"`
 }

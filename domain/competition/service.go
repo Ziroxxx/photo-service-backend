@@ -80,9 +80,10 @@ func (s *Service) GetByID(ctx context.Context, id uuid.UUID) (*Competition, erro
 	if err != nil {
 		return nil, err
 	}
-	item.Stages = stages
 
+	item.Stages = stages
 	s.enrichCompetition(item)
+
 	return item, nil
 }
 
@@ -136,11 +137,14 @@ func (s *Service) Create(
 	}
 
 	var uploadedObjectKey *string
+
 	if cover != nil {
 		objectKey := buildCoverObjectKey(cover.OriginalFilename)
+
 		if err := s.storage.PutObject(ctx, objectKey, cover.Reader, cover.Size, cover.ContentType); err != nil {
 			return nil, err
 		}
+
 		bucket := s.storage.BucketName()
 		c.CoverBucket = &bucket
 		c.CoverObjectKey = &objectKey
@@ -157,6 +161,7 @@ func (s *Service) Create(
 
 	created.Stages = []Stage{}
 	s.enrichCompetition(created)
+
 	return created, nil
 }
 
@@ -229,11 +234,14 @@ func (s *Service) Update(
 	}
 
 	var newObjectKey *string
+
 	if cover != nil {
 		objectKey := buildCoverObjectKey(cover.OriginalFilename)
+
 		if err := s.storage.PutObject(ctx, objectKey, cover.Reader, cover.Size, cover.ContentType); err != nil {
 			return nil, err
 		}
+
 		bucket := s.storage.BucketName()
 		current.CoverBucket = &bucket
 		current.CoverObjectKey = &objectKey
@@ -270,9 +278,10 @@ func (s *Service) Update(
 	if err != nil {
 		return nil, err
 	}
-	updated.Stages = stages
 
+	updated.Stages = stages
 	s.enrichCompetition(updated)
+
 	return updated, nil
 }
 
@@ -301,22 +310,30 @@ func (s *Service) ListStages(ctx context.Context, competitionID uuid.UUID) ([]St
 	if _, err := s.repo.GetCompetitionByID(ctx, competitionID); err != nil {
 		return nil, err
 	}
+
 	return s.repo.ListStages(ctx, competitionID)
 }
 
-func (s *Service) CreateStage(ctx context.Context, actorRole user.Role, competitionID uuid.UUID, req CreateStageRequest) (*Stage, error) {
+func (s *Service) CreateStage(
+	ctx context.Context,
+	actorRole user.Role,
+	competitionID uuid.UUID,
+	req CreateStageRequest,
+) (*Stage, error) {
 	if !canManageCompetitions(actorRole) {
 		return nil, ErrForbiddenCompetitionWrite
 	}
 
-	if _, err := s.repo.GetCompetitionByID(ctx, competitionID); err != nil {
+	comp, err := s.repo.GetCompetitionByID(ctx, competitionID)
+	if err != nil {
 		return nil, err
 	}
 
-	if req.StageDate != nil {
-		if err := validateStageDate(*req.StageDate); err != nil {
-			return nil, err
-		}
+	stageDate := strings.TrimSpace(req.StageDate)
+	stageEndDate := strings.TrimSpace(req.StageEndDate)
+
+	if err := validateStageDateRange(stageDate, stageEndDate, comp); err != nil {
+		return nil, err
 	}
 
 	isActive := true
@@ -328,19 +345,27 @@ func (s *Service) CreateStage(ctx context.Context, actorRole user.Role, competit
 		CompetitionID: competitionID,
 		Name:          strings.TrimSpace(req.Name),
 		SortOrder:     req.SortOrder,
-		StageDate:     req.StageDate,
+		StageDate:     stageDate,
+		StageEndDate:  stageEndDate,
 		IsActive:      isActive,
 	}
 
 	return s.repo.CreateStage(ctx, stage)
 }
 
-func (s *Service) UpdateStage(ctx context.Context, actorRole user.Role, competitionID, stageID uuid.UUID, req UpdateStageRequest) (*Stage, error) {
+func (s *Service) UpdateStage(
+	ctx context.Context,
+	actorRole user.Role,
+	competitionID uuid.UUID,
+	stageID uuid.UUID,
+	req UpdateStageRequest,
+) (*Stage, error) {
 	if !canManageCompetitions(actorRole) {
 		return nil, ErrForbiddenCompetitionWrite
 	}
 
-	if _, err := s.repo.GetCompetitionByID(ctx, competitionID); err != nil {
+	comp, err := s.repo.GetCompetitionByID(ctx, competitionID)
+	if err != nil {
 		return nil, err
 	}
 
@@ -352,15 +377,23 @@ func (s *Service) UpdateStage(ctx context.Context, actorRole user.Role, competit
 	if req.Name != nil {
 		stage.Name = strings.TrimSpace(*req.Name)
 	}
+
 	if req.SortOrder != nil {
 		stage.SortOrder = *req.SortOrder
 	}
+
 	if req.StageDate != nil {
-		if err := validateStageDate(*req.StageDate); err != nil {
-			return nil, err
-		}
-		stage.StageDate = req.StageDate
+		stage.StageDate = strings.TrimSpace(*req.StageDate)
 	}
+
+	if req.StageEndDate != nil {
+		stage.StageEndDate = strings.TrimSpace(*req.StageEndDate)
+	}
+
+	if err := validateStageDateRange(stage.StageDate, stage.StageEndDate, comp); err != nil {
+		return nil, err
+	}
+
 	if req.IsActive != nil {
 		stage.IsActive = *req.IsActive
 	}
@@ -384,12 +417,14 @@ func (s *Service) enrichCompetition(c *Competition) {
 	if c == nil {
 		return
 	}
+
 	if c.CoverObjectKey != nil {
 		url := s.storage.ObjectURL(*c.CoverObjectKey)
 		c.CoverURL = &url
 	} else {
 		c.CoverURL = nil
 	}
+
 	if c.Stages == nil {
 		c.Stages = []Stage{}
 	}
@@ -408,15 +443,57 @@ func validateStatus(status Status) error {
 	}
 }
 
-func validateStageDate(value string) error {
-	if strings.TrimSpace(value) == "" {
-		return ErrInvalidStageDate
-	}
-	_, err := time.Parse("2006-01-02", value)
+func validateStageDateRange(stageStartRaw, stageEndRaw string, comp *Competition) error {
+	stageStart, err := parseStageDate(stageStartRaw)
 	if err != nil {
+		return err
+	}
+
+	stageEnd, err := parseStageDate(stageEndRaw)
+	if err != nil {
+		return err
+	}
+
+	if stageEnd.Before(stageStart) {
 		return ErrInvalidStageDate
 	}
+
+	competitionStart := startOfDay(comp.StartAt)
+	competitionEnd := endOfDay(comp.EndAt)
+
+	if stageStart.Before(competitionStart) || stageStart.After(competitionEnd) {
+		return ErrInvalidStageDate
+	}
+
+	if stageEnd.Before(competitionStart) || stageEnd.After(competitionEnd) {
+		return ErrInvalidStageDate
+	}
+
 	return nil
+}
+
+func parseStageDate(value string) (time.Time, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return time.Time{}, ErrInvalidStageDate
+	}
+
+	parsed, err := time.Parse("2006-01-02", value)
+	if err != nil {
+		return time.Time{}, ErrInvalidStageDate
+	}
+
+	return parsed, nil
+}
+
+func startOfDay(value time.Time) time.Time {
+	year, month, day := value.Date()
+	return time.Date(year, month, day, 0, 0, 0, 0, value.Location())
+}
+
+func endOfDay(value time.Time) time.Time {
+	year, month, day := value.Date()
+	return time.Date(year, month, day, 23, 59, 59, int(time.Second-time.Nanosecond), value.Location())
 }
 
 func buildCoverObjectKey(originalFilename string) string {
@@ -424,5 +501,6 @@ func buildCoverObjectKey(originalFilename string) string {
 	if ext == "" {
 		ext = ".bin"
 	}
+
 	return fmt.Sprintf("competition-covers/%s%s", uuid.NewString(), ext)
 }

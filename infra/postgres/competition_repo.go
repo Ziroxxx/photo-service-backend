@@ -64,6 +64,7 @@ func scanStage(s rowScanner) (*competition.Stage, error) {
 		&st.Name,
 		&st.SortOrder,
 		&st.StageDate,
+		&st.StageEndDate,
 		&st.IsActive,
 		&st.CreatedAt,
 		&st.UpdatedAt,
@@ -82,7 +83,7 @@ func (r *CompetitionRepo) ListStagesByCompetitionIDs(ctx context.Context, compet
 
 	q := `
 		SELECT
-			id, competition_id, name, sort_order, stage_date::text,
+			id, competition_id, name, sort_order, stage_date::text, stage_end_date::text,
 			is_active, created_at, updated_at
 		FROM competition_stages
 		WHERE competition_id = ANY($1)
@@ -103,6 +104,7 @@ func (r *CompetitionRepo) ListStagesByCompetitionIDs(ctx context.Context, compet
 			&st.Name,
 			&st.SortOrder,
 			&st.StageDate,
+			&st.StageEndDate,
 			&st.IsActive,
 			&st.CreatedAt,
 			&st.UpdatedAt,
@@ -411,7 +413,7 @@ func (r *CompetitionRepo) DeleteCompetition(ctx context.Context, id uuid.UUID) e
 func (r *CompetitionRepo) ListStages(ctx context.Context, competitionID uuid.UUID) ([]competition.Stage, error) {
 	q := `
 		SELECT
-			id, competition_id, name, sort_order, stage_date::text,
+			id, competition_id, name, sort_order, stage_date::text, stage_end_date::text,
 			is_active, created_at, updated_at
 		FROM competition_stages
 		WHERE competition_id = $1
@@ -433,6 +435,7 @@ func (r *CompetitionRepo) ListStages(ctx context.Context, competitionID uuid.UUI
 			&st.Name,
 			&st.SortOrder,
 			&st.StageDate,
+			&st.StageEndDate,
 			&st.IsActive,
 			&st.CreatedAt,
 			&st.UpdatedAt,
@@ -448,7 +451,7 @@ func (r *CompetitionRepo) ListStages(ctx context.Context, competitionID uuid.UUI
 func (r *CompetitionRepo) GetStageByID(ctx context.Context, competitionID, stageID uuid.UUID) (*competition.Stage, error) {
 	q := `
 		SELECT
-			id, competition_id, name, sort_order, stage_date::text,
+			id, competition_id, name, sort_order, stage_date::text, stage_end_date::text,
 			is_active, created_at, updated_at
 		FROM competition_stages
 		WHERE competition_id = $1 AND id = $2
@@ -468,11 +471,11 @@ func (r *CompetitionRepo) GetStageByID(ctx context.Context, competitionID, stage
 func (r *CompetitionRepo) CreateStage(ctx context.Context, s *competition.Stage) (*competition.Stage, error) {
 	q := `
 		INSERT INTO competition_stages (
-			competition_id, name, sort_order, stage_date, is_active
+			competition_id, name, sort_order, stage_date, stage_end_date, is_active
 		)
-		VALUES ($1, $2, $3, $4::date, $5)
+		VALUES ($1, $2, $3, $4::date, $5::date, $6)
 		RETURNING
-			id, competition_id, name, sort_order, stage_date::text,
+			id, competition_id, name, sort_order, stage_date::text, stage_end_date::text,
 			is_active, created_at, updated_at
 	`
 
@@ -483,6 +486,7 @@ func (r *CompetitionRepo) CreateStage(ctx context.Context, s *competition.Stage)
 		s.Name,
 		s.SortOrder,
 		s.StageDate,
+		s.StageEndDate,
 		s.IsActive,
 	))
 }
@@ -494,10 +498,11 @@ func (r *CompetitionRepo) UpdateStage(ctx context.Context, s *competition.Stage)
 			name = $3,
 			sort_order = $4,
 			stage_date = $5::date,
-			is_active = $6
+			stage_end_date = $6::date,
+			is_active = $7
 		WHERE competition_id = $1 AND id = $2
 		RETURNING
-			id, competition_id, name, sort_order, stage_date::text,
+			id, competition_id, name, sort_order, stage_date::text, stage_end_date::text,
 			is_active, created_at, updated_at
 	`
 
@@ -509,6 +514,7 @@ func (r *CompetitionRepo) UpdateStage(ctx context.Context, s *competition.Stage)
 		s.Name,
 		s.SortOrder,
 		s.StageDate,
+		s.StageEndDate,
 		s.IsActive,
 	))
 	if err != nil {
