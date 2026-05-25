@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"path/filepath"
 	"strings"
 	"time"
@@ -235,12 +236,25 @@ func (s *Service) Update(
 
 	var newObjectKey *string
 
+	log.Printf("competition update: cover exists=%v", cover != nil)
+
 	if cover != nil {
+		log.Printf(
+			"competition update: cover file name=%s size=%d contentType=%s",
+			cover.OriginalFilename,
+			cover.Size,
+			cover.ContentType,
+		)
+
 		objectKey := buildCoverObjectKey(cover.OriginalFilename)
+
+		started := time.Now()
 
 		if err := s.storage.PutObject(ctx, objectKey, cover.Reader, cover.Size, cover.ContentType); err != nil {
 			return nil, err
 		}
+
+		log.Printf("competition update: PutObject took %s", time.Since(started))
 
 		bucket := s.storage.BucketName()
 		current.CoverBucket = &bucket
@@ -262,7 +276,12 @@ func (s *Service) Update(
 
 	current.UpdatedBy = actorID
 
+	started := time.Now()
+
 	updated, err := s.repo.UpdateCompetition(ctx, current)
+
+	log.Printf("competition update: UpdateCompetition took %s", time.Since(started))
+
 	if err != nil {
 		if newObjectKey != nil {
 			_ = s.storage.RemoveObject(ctx, *newObjectKey)
@@ -502,5 +521,5 @@ func buildCoverObjectKey(originalFilename string) string {
 		ext = ".bin"
 	}
 
-	return fmt.Sprintf("competition-covers/%s%s", uuid.NewString(), ext)
+	return fmt.Sprintf("%s%s", uuid.NewString(), ext)
 }
