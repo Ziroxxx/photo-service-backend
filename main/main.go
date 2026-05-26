@@ -107,13 +107,42 @@ func main() {
 		cfg.RefreshTokenTTL,
 	)
 
-	imageProcessor := imaging.NewProcessor(
+	localImageProcessor := imaging.NewProcessor(
 		cfg.PhotoPreviewMaxWidth,
 		cfg.PhotoPreviewMaxHeight,
 		cfg.PhotoWatermarkText,
 		cfg.PhotoJPEGQuality,
 		cfg.PhotoWatermarkImagePath,
 	)
+
+	localBatchProcessor := imaging.NewLocalBatchProcessor(localImageProcessor)
+
+	cudaClient := imaging.NewCudaClient(
+		cfg.ImageProcessingServiceURL,
+		cfg.ImageProcessingServiceTimeout,
+	)
+
+	cudaBatchProcessor := imaging.NewCudaBatchProcessor(
+		cudaClient,
+		photoStorage,
+		cfg.PhotoPreviewMaxWidth,
+		cfg.PhotoPreviewMaxHeight,
+		cfg.PhotoJPEGQuality,
+		0.22,
+		cfg.ImageProcessingWatermarkOpacity,
+		20,
+		cfg.ImageProcessingPresignedTTL,
+	)
+
+	imageProcessor := imaging.NewBatchSelectorProcessor(
+		cfg.PhotoProcessorMode,
+		localBatchProcessor,
+		cudaBatchProcessor,
+		cudaClient,
+		cfg.ImageProcessingHealthTimeout,
+	)
+
+	log.Printf("photo processor mode: %s", cfg.PhotoProcessorMode)
 
 	var bibRecognizer photodomain.BibRecognizer
 	if cfg.OCRServiceURL != "" {
@@ -149,6 +178,7 @@ func main() {
 	authMiddleware := middleware.NewAuthMiddleware(tokenManager, userRepo)
 
 	r := gin.Default()
+	r.MaxMultipartMemory = 1024 << 20
 
 	r.Use(cors.New(cors.Config{
 		AllowOrigins:     cfg.CORSAllowOrigins,

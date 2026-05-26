@@ -94,7 +94,10 @@ func (h *PhotoHandler) UploadPhotos(c *gin.Context) {
 
 	form, err := c.MultipartForm()
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid multipart form"})
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   "invalid multipart form",
+			"details": err.Error(),
+		})
 		return
 	}
 

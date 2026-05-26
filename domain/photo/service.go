@@ -17,7 +17,7 @@ import (
 	"github.com/google/uuid"
 )
 
-const maxUploadFiles = 50
+const maxUploadFiles = 5000
 
 type CompetitionReader interface {
 	GetCompetitionByID(ctx context.Context, id uuid.UUID) (*competitiondomain.Competition, error)
@@ -52,7 +52,7 @@ type DownloadFile struct {
 
 type Service struct {
 	repo         Repository
-	processor    Processor
+	processor    BatchPhotoProcessor
 	storage      Storage
 	access       AccessChecker
 	competitions CompetitionReader
@@ -61,7 +61,7 @@ type Service struct {
 
 func NewService(
 	repo Repository,
-	processor Processor,
+	processor BatchPhotoProcessor,
 	storage Storage,
 	access AccessChecker,
 	competitions CompetitionReader,
@@ -186,8 +186,11 @@ func (s *Service) UploadPhotos(
 		Failed: []UploadPhotoItemResult{},
 	}
 
+	prepared := make([]preparedUpload, 0, len(files))
+	inputs := make([]ProcessInput, 0, len(files))
+
 	for _, f := range files {
-		item, err := s.processSingleUpload(ctx, actorID, actorRole, comp, req.StageID, f)
+		prep, input, err := s.prepareUploadForProcessing(ctx, comp, f)
 		if err != nil {
 			result.Failed = append(result.Failed, UploadPhotoItemResult{
 				FileName: f.FileName,
@@ -196,9 +199,78 @@ func (s *Service) UploadPhotos(
 			continue
 		}
 
+		prepared = append(prepared, prep)
+		inputs = append(inputs, input)
+	}
+
+	defer func() {
+		for _, prep := range prepared {
+			cleanupTempVariant(prep.TempOriginalPath)
+		}
+	}()
+
+	if len(inputs) == 0 {
+		return result, nil
+	}
+
+	processedItems, err := s.processor.ProcessBatch(ctx, inputs)
+	if err != nil {
+		for _, prep := range prepared {
+			_ = s.storage.RemoveObject(ctx, s.storage.OriginalBucket(), prep.OriginalObjectKey)
+			_ = s.storage.RemoveObject(ctx, s.storage.DerivedBucket(), prep.WatermarkedObjectKey)
+			_ = s.storage.RemoveObject(ctx, s.storage.DerivedBucket(), prep.PreviewObjectKey)
+
+			result.Failed = append(result.Failed, UploadPhotoItemResult{
+				FileName: prep.File.FileName,
+				Error:    err.Error(),
+			})
+		}
+
+		return result, nil
+	}
+
+	if len(processedItems) != len(prepared) {
+		err := fmt.Errorf("processed items count mismatch: got %d, want %d", len(processedItems), len(prepared))
+
+		for _, prep := range prepared {
+			_ = s.storage.RemoveObject(ctx, s.storage.OriginalBucket(), prep.OriginalObjectKey)
+			_ = s.storage.RemoveObject(ctx, s.storage.DerivedBucket(), prep.WatermarkedObjectKey)
+			_ = s.storage.RemoveObject(ctx, s.storage.DerivedBucket(), prep.PreviewObjectKey)
+
+			result.Failed = append(result.Failed, UploadPhotoItemResult{
+				FileName: prep.File.FileName,
+				Error:    err.Error(),
+			})
+		}
+
+		return result, nil
+	}
+
+	for i, prep := range prepared {
+		created, err := s.finalizeProcessedUpload(
+			ctx,
+			actorID,
+			actorRole,
+			comp,
+			req.StageID,
+			prep,
+			processedItems[i],
+		)
+		if err != nil {
+			_ = s.storage.RemoveObject(ctx, s.storage.OriginalBucket(), prep.OriginalObjectKey)
+			_ = s.storage.RemoveObject(ctx, s.storage.DerivedBucket(), prep.WatermarkedObjectKey)
+			_ = s.storage.RemoveObject(ctx, s.storage.DerivedBucket(), prep.PreviewObjectKey)
+
+			result.Failed = append(result.Failed, UploadPhotoItemResult{
+				FileName: prep.File.FileName,
+				Error:    err.Error(),
+			})
+			continue
+		}
+
 		result.Items = append(result.Items, UploadPhotoItemResult{
-			FileName: f.FileName,
-			Photo:    item,
+			FileName: prep.File.FileName,
+			Photo:    created,
 		})
 	}
 
@@ -499,141 +571,6 @@ func (s *Service) resolveDownloadRef(
 	}, nil
 }
 
-func (s *Service) processSingleUpload(
-	ctx context.Context,
-	actorID uuid.UUID,
-	actorRole user.Role,
-	comp *competitiondomain.Competition,
-	stageID *uuid.UUID,
-	file UploadFile,
-) (*Photo, error) {
-	src, err := file.Open()
-	if err != nil {
-		return nil, err
-	}
-	defer src.Close()
-
-	ext := strings.ToLower(filepath.Ext(file.FileName))
-	tmpOriginal, err := os.CreateTemp("", "photo-original-*"+ext)
-	if err != nil {
-		return nil, err
-	}
-	defer func() {
-		_ = os.Remove(tmpOriginal.Name())
-	}()
-
-	if _, err := io.Copy(tmpOriginal, src); err != nil {
-		_ = tmpOriginal.Close()
-		return nil, err
-	}
-	if err := tmpOriginal.Close(); err != nil {
-		return nil, err
-	}
-
-	processed, err := s.processor.Process(ctx, ProcessInput{
-		SourcePath:       tmpOriginal.Name(),
-		OriginalFilename: file.FileName,
-		DeclaredMimeType: file.ContentType,
-	})
-	if err != nil {
-		return nil, err
-	}
-	defer cleanupTempVariant(processed.Watermarked.TempFilePath)
-	defer cleanupTempVariant(processed.Preview.TempFilePath)
-
-	photoID := uuid.New()
-
-	originalKey := s.storage.BuildOriginalObjectKey(comp.Slug, photoID, file.FileName)
-	watermarkedKey := s.storage.BuildWatermarkedObjectKey(comp.Slug, photoID)
-	previewKey := s.storage.BuildPreviewObjectKey(comp.Slug, photoID)
-
-	if err := s.storage.PutOriginalFromPath(ctx, originalKey, processed.Original.TempFilePath, processed.Original.MimeType); err != nil {
-		return nil, err
-	}
-	if err := s.storage.PutDerivedFromPath(ctx, watermarkedKey, processed.Watermarked.TempFilePath, processed.Watermarked.MimeType); err != nil {
-		_ = s.storage.RemoveObject(ctx, s.storage.OriginalBucket(), originalKey)
-		return nil, err
-	}
-	if err := s.storage.PutDerivedFromPath(ctx, previewKey, processed.Preview.TempFilePath, processed.Preview.MimeType); err != nil {
-		_ = s.storage.RemoveObject(ctx, s.storage.OriginalBucket(), originalKey)
-		_ = s.storage.RemoveObject(ctx, s.storage.DerivedBucket(), watermarkedKey)
-		return nil, err
-	}
-
-	width := processed.Original.Width
-	height := processed.Original.Height
-
-	p := &Photo{
-		ID:                   photoID,
-		CompetitionID:        comp.ID,
-		StageID:              stageID,
-		AuthorUserID:         actorID,
-		OriginalFilename:     file.FileName,
-		MimeType:             processed.Original.MimeType,
-		SizeBytes:            processed.Original.SizeBytes,
-		DayDate:              processed.DayDate,
-		Width:                &width,
-		Height:               &height,
-		PrimaryBib:           nil,
-		BibRecognitionStatus: BibRecognitionStatusPending,
-		BibRecognitionError:  nil,
-		WatermarkRequired:    true,
-	}
-
-	versions := []PhotoVersion{
-		{
-			ID:            uuid.New(),
-			PhotoID:       photoID,
-			Variant:       VariantOriginal,
-			StorageBucket: s.storage.OriginalBucket(),
-			ObjectKey:     originalKey,
-			MimeType:      processed.Original.MimeType,
-			SizeBytes:     processed.Original.SizeBytes,
-			Width:         processed.Original.Width,
-			Height:        processed.Original.Height,
-		},
-		{
-			ID:            uuid.New(),
-			PhotoID:       photoID,
-			Variant:       VariantWatermarked,
-			StorageBucket: s.storage.DerivedBucket(),
-			ObjectKey:     watermarkedKey,
-			MimeType:      processed.Watermarked.MimeType,
-			SizeBytes:     processed.Watermarked.SizeBytes,
-			Width:         processed.Watermarked.Width,
-			Height:        processed.Watermarked.Height,
-		},
-		{
-			ID:            uuid.New(),
-			PhotoID:       photoID,
-			Variant:       VariantPreview,
-			StorageBucket: s.storage.DerivedBucket(),
-			ObjectKey:     previewKey,
-			MimeType:      processed.Preview.MimeType,
-			SizeBytes:     processed.Preview.SizeBytes,
-			Width:         processed.Preview.Width,
-			Height:        processed.Preview.Height,
-		},
-	}
-
-	created, err := s.repo.CreatePhotoWithVersions(ctx, p, versions)
-	if err != nil {
-		_ = s.storage.RemoveObject(ctx, s.storage.OriginalBucket(), originalKey)
-		_ = s.storage.RemoveObject(ctx, s.storage.DerivedBucket(), watermarkedKey)
-		_ = s.storage.RemoveObject(ctx, s.storage.DerivedBucket(), previewKey)
-		return nil, err
-	}
-
-	s.scheduleBibRecognition(photoID, file.FileName, s.storage.OriginalBucket(), originalKey)
-
-	items, err := s.hydratePhotos(ctx, actorID, actorRole, comp.ID, []Photo{*created})
-	if err != nil {
-		return nil, err
-	}
-
-	return &items[0], nil
-}
-
 func (s *Service) scheduleBibRecognition(photoID uuid.UUID, fileName, bucket, objectKey string) {
 	if s.recognizer == nil {
 		return
@@ -847,3 +784,195 @@ func cleanupTempVariant(path string) {
 }
 
 var _ AccessChecker = (*accessdomain.Service)(nil)
+
+type preparedUpload struct {
+	File UploadFile
+
+	PhotoID uuid.UUID
+
+	TempOriginalPath string
+
+	OriginalObjectKey    string
+	WatermarkedObjectKey string
+	PreviewObjectKey     string
+}
+
+func (s *Service) prepareUploadForProcessing(
+	ctx context.Context,
+	comp *competitiondomain.Competition,
+	file UploadFile,
+) (preparedUpload, ProcessInput, error) {
+	src, err := file.Open()
+	if err != nil {
+		return preparedUpload{}, ProcessInput{}, err
+	}
+	defer src.Close()
+
+	ext := strings.ToLower(filepath.Ext(file.FileName))
+	tmpOriginal, err := os.CreateTemp("", "photo-original-*"+ext)
+	if err != nil {
+		return preparedUpload{}, ProcessInput{}, err
+	}
+
+	tmpPath := tmpOriginal.Name()
+
+	if _, err := io.Copy(tmpOriginal, src); err != nil {
+		_ = tmpOriginal.Close()
+		_ = os.Remove(tmpPath)
+		return preparedUpload{}, ProcessInput{}, err
+	}
+
+	if err := tmpOriginal.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return preparedUpload{}, ProcessInput{}, err
+	}
+
+	photoID := uuid.New()
+
+	originalKey := s.storage.BuildOriginalObjectKey(comp.Slug, photoID, file.FileName)
+	watermarkedKey := s.storage.BuildWatermarkedObjectKey(comp.Slug, photoID)
+	previewKey := s.storage.BuildPreviewObjectKey(comp.Slug, photoID)
+
+	contentType := file.ContentType
+	if strings.TrimSpace(contentType) == "" {
+		contentType = "application/octet-stream"
+	}
+
+	if err := s.storage.PutOriginalFromPath(ctx, originalKey, tmpPath, contentType); err != nil {
+		_ = os.Remove(tmpPath)
+		return preparedUpload{}, ProcessInput{}, err
+	}
+
+	prep := preparedUpload{
+		File:                 file,
+		PhotoID:              photoID,
+		TempOriginalPath:     tmpPath,
+		OriginalObjectKey:    originalKey,
+		WatermarkedObjectKey: watermarkedKey,
+		PreviewObjectKey:     previewKey,
+	}
+
+	input := ProcessInput{
+		SourcePath:       tmpPath,
+		OriginalFilename: file.FileName,
+		DeclaredMimeType: contentType,
+
+		OriginalBucket:    s.storage.OriginalBucket(),
+		OriginalObjectKey: originalKey,
+
+		DerivedBucket:        s.storage.DerivedBucket(),
+		PreviewObjectKey:     previewKey,
+		WatermarkedObjectKey: watermarkedKey,
+	}
+
+	return prep, input, nil
+}
+
+func (s *Service) finalizeProcessedUpload(
+	ctx context.Context,
+	actorID uuid.UUID,
+	actorRole user.Role,
+	comp *competitiondomain.Competition,
+	stageID *uuid.UUID,
+	prep preparedUpload,
+	processed *ProcessedPhoto,
+) (*Photo, error) {
+	if processed == nil {
+		return nil, fmt.Errorf("processed photo is nil")
+	}
+
+	defer cleanupTempVariant(processed.Watermarked.TempFilePath)
+	defer cleanupTempVariant(processed.Preview.TempFilePath)
+
+	if !processed.Watermarked.AlreadyUploaded {
+		if err := s.storage.PutDerivedFromPath(
+			ctx,
+			prep.WatermarkedObjectKey,
+			processed.Watermarked.TempFilePath,
+			processed.Watermarked.MimeType,
+		); err != nil {
+			return nil, err
+		}
+	}
+
+	if !processed.Preview.AlreadyUploaded {
+		if err := s.storage.PutDerivedFromPath(
+			ctx,
+			prep.PreviewObjectKey,
+			processed.Preview.TempFilePath,
+			processed.Preview.MimeType,
+		); err != nil {
+			return nil, err
+		}
+	}
+
+	width := processed.Original.Width
+	height := processed.Original.Height
+
+	p := &Photo{
+		ID:                   prep.PhotoID,
+		CompetitionID:        comp.ID,
+		StageID:              stageID,
+		AuthorUserID:         actorID,
+		OriginalFilename:     prep.File.FileName,
+		MimeType:             processed.Original.MimeType,
+		SizeBytes:            processed.Original.SizeBytes,
+		DayDate:              processed.DayDate,
+		Width:                &width,
+		Height:               &height,
+		PrimaryBib:           nil,
+		BibRecognitionStatus: BibRecognitionStatusPending,
+		BibRecognitionError:  nil,
+		WatermarkRequired:    true,
+	}
+
+	versions := []PhotoVersion{
+		{
+			ID:            uuid.New(),
+			PhotoID:       prep.PhotoID,
+			Variant:       VariantOriginal,
+			StorageBucket: s.storage.OriginalBucket(),
+			ObjectKey:     prep.OriginalObjectKey,
+			MimeType:      processed.Original.MimeType,
+			SizeBytes:     processed.Original.SizeBytes,
+			Width:         processed.Original.Width,
+			Height:        processed.Original.Height,
+		},
+		{
+			ID:            uuid.New(),
+			PhotoID:       prep.PhotoID,
+			Variant:       VariantWatermarked,
+			StorageBucket: s.storage.DerivedBucket(),
+			ObjectKey:     prep.WatermarkedObjectKey,
+			MimeType:      processed.Watermarked.MimeType,
+			SizeBytes:     processed.Watermarked.SizeBytes,
+			Width:         processed.Watermarked.Width,
+			Height:        processed.Watermarked.Height,
+		},
+		{
+			ID:            uuid.New(),
+			PhotoID:       prep.PhotoID,
+			Variant:       VariantPreview,
+			StorageBucket: s.storage.DerivedBucket(),
+			ObjectKey:     prep.PreviewObjectKey,
+			MimeType:      processed.Preview.MimeType,
+			SizeBytes:     processed.Preview.SizeBytes,
+			Width:         processed.Preview.Width,
+			Height:        processed.Preview.Height,
+		},
+	}
+
+	created, err := s.repo.CreatePhotoWithVersions(ctx, p, versions)
+	if err != nil {
+		return nil, err
+	}
+
+	s.scheduleBibRecognition(prep.PhotoID, prep.File.FileName, s.storage.OriginalBucket(), prep.OriginalObjectKey)
+
+	items, err := s.hydratePhotos(ctx, actorID, actorRole, comp.ID, []Photo{*created})
+	if err != nil {
+		return nil, err
+	}
+
+	return &items[0], nil
+}

@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/url"
 	"path"
+	"time"
 
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
@@ -14,6 +15,10 @@ type MinioObjectStorage struct {
 	client        *minio.Client
 	bucket        string
 	publicBaseURL string
+}
+
+type MinioStorage struct {
+	client *minio.Client
 }
 
 func NewMinioObjectStorage(
@@ -78,4 +83,50 @@ func (s *MinioObjectStorage) ObjectURL(objectKey string) string {
 	}
 	u.Path = path.Join(u.Path, s.bucket, objectKey)
 	return u.String()
+}
+
+func (s *MinioStorage) PresignedGetObject(
+	ctx context.Context,
+	bucket string,
+	objectKey string,
+	ttl time.Duration,
+) (string, error) {
+	presignedURL, err := s.client.PresignedGetObject(
+		ctx,
+		bucket,
+		objectKey,
+		ttl,
+		url.Values{},
+	)
+	if err != nil {
+		return "", err
+	}
+
+	return presignedURL.String(), nil
+}
+
+func (s *MinioStorage) PresignedPutObject(
+	ctx context.Context,
+	bucket string,
+	objectKey string,
+	ttl time.Duration,
+	contentType string,
+) (string, error) {
+	query := url.Values{}
+
+	if contentType != "" {
+		query.Set("Content-Type", contentType)
+	}
+
+	presignedURL, err := s.client.PresignedPutObject(
+		ctx,
+		bucket,
+		objectKey,
+		ttl,
+	)
+	if err != nil {
+		return "", err
+	}
+
+	return presignedURL.String(), nil
 }

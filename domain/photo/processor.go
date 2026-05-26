@@ -18,8 +18,15 @@ type ReadCloseSeek interface {
 
 type ProcessInput struct {
 	SourcePath       string
-	OriginalFilename string
 	DeclaredMimeType string
+	OriginalFilename string
+
+	OriginalBucket    string
+	OriginalObjectKey string
+
+	DerivedBucket        string
+	PreviewObjectKey     string
+	WatermarkedObjectKey string
 }
 
 type ProcessedVariant struct {
@@ -29,6 +36,11 @@ type ProcessedVariant struct {
 	SizeBytes    int64
 	Width        int
 	Height       int
+
+	// Для CUDA-режима: файл уже загружен микросервисом в MinIO.
+	Bucket          string
+	ObjectKey       string
+	AlreadyUploaded bool
 }
 
 type ProcessedPhoto struct {
@@ -40,4 +52,8 @@ type ProcessedPhoto struct {
 
 type Processor interface {
 	Process(ctx context.Context, input ProcessInput) (*ProcessedPhoto, error)
+}
+
+type BatchPhotoProcessor interface {
+	ProcessBatch(ctx context.Context, inputs []ProcessInput) ([]*ProcessedPhoto, error)
 }

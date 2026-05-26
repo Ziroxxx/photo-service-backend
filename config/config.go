@@ -35,6 +35,14 @@ type Config struct {
 	OCRServiceTimeout       time.Duration
 	PhotoWatermarkImagePath string
 	CORSAllowOrigins        []string
+
+	PhotoProcessorMode              string
+	ImageProcessingServiceURL       string
+	ImageProcessingServiceTimeout   time.Duration
+	ImageProcessingHealthTimeout    time.Duration
+	ImageProcessingBatchSize        int
+	ImageProcessingPresignedTTL     time.Duration
+	ImageProcessingWatermarkOpacity float64
 }
 
 func MustLoad() Config {
@@ -65,6 +73,14 @@ func MustLoad() Config {
 		OCRServiceTimeout:       mustParseDuration(getEnv("OCR_SERVICE_TIMEOUT", "15s")),
 		PhotoWatermarkImagePath: getEnv("PHOTO_WATERMARK_IMAGE_PATH", ""),
 		CORSAllowOrigins:        splitCSV(getEnv("CORS_ALLOW_ORIGINS", "http://localhost:5173")),
+
+		PhotoProcessorMode:              getEnv("PHOTO_PROCESSOR_MODE", "auto"),
+		ImageProcessingServiceURL:       getEnv("IMAGE_PROCESSING_SERVICE_URL", "http://image_processing_service:8081"),
+		ImageProcessingServiceTimeout:   getEnvDuration("IMAGE_PROCESSING_SERVICE_TIMEOUT", 120*time.Second),
+		ImageProcessingHealthTimeout:    getEnvDuration("IMAGE_PROCESSING_HEALTH_TIMEOUT", 2*time.Second),
+		ImageProcessingBatchSize:        getEnvInt("IMAGE_PROCESSING_BATCH_SIZE", 25),
+		ImageProcessingPresignedTTL:     getEnvDuration("IMAGE_PROCESSING_PRESIGNED_URL_TTL", 10*time.Minute),
+		ImageProcessingWatermarkOpacity: getEnvFloat("IMAGE_PROCESSING_WATERMARK_OPACITY", 1),
 	}
 }
 
@@ -141,4 +157,18 @@ func getEnvInt(key string, fallback int) int {
 		log.Fatalf("invalid int in %s: %v", key, err)
 	}
 	return i
+}
+
+func getEnvFloat(key string, defaultValue float64) float64 {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return defaultValue
+	}
+
+	parsed, err := strconv.ParseFloat(value, 64)
+	if err != nil {
+		return defaultValue
+	}
+
+	return parsed
 }

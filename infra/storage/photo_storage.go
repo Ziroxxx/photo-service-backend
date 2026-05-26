@@ -8,6 +8,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/minio/minio-go/v7"
@@ -148,4 +149,43 @@ func (s *PhotoStorage) OpenObject(ctx context.Context, bucket, objectKey string)
 	}
 
 	return obj, stat.ContentType, nil
+}
+
+func (s *PhotoStorage) PresignedGetObject(
+	ctx context.Context,
+	bucket string,
+	objectKey string,
+	ttl time.Duration,
+) (string, error) {
+	presignedURL, err := s.client.PresignedGetObject(
+		ctx,
+		bucket,
+		objectKey,
+		ttl,
+		url.Values{},
+	)
+	if err != nil {
+		return "", err
+	}
+
+	return presignedURL.String(), nil
+}
+
+func (s *PhotoStorage) PresignedPutObject(
+	ctx context.Context,
+	bucket string,
+	objectKey string,
+	ttl time.Duration,
+) (string, error) {
+	presignedURL, err := s.client.PresignedPutObject(
+		ctx,
+		bucket,
+		objectKey,
+		ttl,
+	)
+	if err != nil {
+		return "", err
+	}
+
+	return presignedURL.String(), nil
 }
