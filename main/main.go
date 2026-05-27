@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -23,10 +24,14 @@ import (
 	"photo-service-back/transport/http/handlers"
 	"photo-service-back/transport/http/middleware"
 
+	redisinfra "photo-service-back/infra/redis"
+
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joho/godotenv"
+
+	"github.com/redis/go-redis/v9"
 )
 
 func main() {
@@ -53,6 +58,7 @@ func main() {
 		cfg.MinIOCompetitionCoversBucket,
 		cfg.MinIOPublicBaseURL,
 	)
+
 	if err != nil {
 		log.Fatalf("failed to init minio cover client: %v", err)
 	}
@@ -70,12 +76,35 @@ func main() {
 		cfg.MinIOPhotoDerivedBucket,
 		cfg.MinIOPublicBaseURL,
 	)
+
 	if err != nil {
 		log.Fatalf("failed to init minio photo client: %v", err)
 	}
 
 	if err := photoStorage.EnsureBuckets(ctx); err != nil {
 		log.Fatalf("failed to ensure minio photo buckets: %v", err)
+	}
+
+	redisClient := redis.NewClient(&redis.Options{
+		Addr:     cfg.RedisAddr,
+		Password: cfg.RedisPassword,
+		DB:       cfg.RedisDB,
+	})
+	defer redisClient.Close()
+
+	if err := redisClient.Ping(ctx).Err(); err != nil {
+		if cfg.PhotoUploadAsync || cfg.ImageProcessingWorkerEnabled {
+			log.Fatalf("failed to connect redis: %v", err)
+		}
+		log.Printf("redis disabled/unavailable: %v", err)
+	}
+
+	uploadQueue := redisinfra.NewUploadQueue(redisClient)
+
+	if cfg.PhotoUploadAsync || cfg.ImageProcessingWorkerEnabled {
+		if err := uploadQueue.EnsureConsumerGroup(ctx); err != nil {
+			log.Fatalf("failed to ensure redis consumer group: %v", err)
+		}
 	}
 
 	userRepo := postgres.NewUserRepo(db)
@@ -115,7 +144,10 @@ func main() {
 		cfg.PhotoWatermarkImagePath,
 	)
 
-	localBatchProcessor := imaging.NewLocalBatchProcessor(localImageProcessor)
+	localBatchProcessor := imaging.NewAsyncLocalBatchProcessor(
+		localImageProcessor,
+		photoStorage,
+	)
 
 	cudaClient := imaging.NewCudaClient(
 		cfg.ImageProcessingServiceURL,
@@ -129,12 +161,12 @@ func main() {
 		cfg.PhotoPreviewMaxHeight,
 		cfg.PhotoJPEGQuality,
 		0.22,
-		cfg.ImageProcessingWatermarkOpacity,
+		1,
 		20,
 		cfg.ImageProcessingPresignedTTL,
 	)
 
-	imageProcessor := imaging.NewBatchSelectorProcessor(
+	batchProcessor := imaging.NewBatchSelectorProcessor(
 		cfg.PhotoProcessorMode,
 		localBatchProcessor,
 		cudaBatchProcessor,
@@ -156,13 +188,48 @@ func main() {
 		log.Printf("ocr recognizer disabled: OCR_SERVICE_URL is empty")
 	}
 
+	var asyncUploadService *photodomain.AsyncUploadService
+
+	if cfg.PhotoUploadAsync {
+		asyncUploadService = photodomain.NewAsyncUploadService(
+			photoStorage,
+			competitionRepo,
+			uploadQueue,
+			cfg.PhotoUploadChunkMaxFiles,
+			cfg.PhotoUploadStatusTTL,
+		)
+
+		log.Printf("async photo upload enabled")
+	}
+
+	workerCtx, workerCancel := context.WithCancel(context.Background())
+	defer workerCancel()
+
+	if cfg.ImageProcessingWorkerEnabled {
+		worker := photodomain.NewAsyncProcessingWorker(
+			uploadQueue,
+			batchProcessor,
+			photoRepo,
+			cfg.ImageProcessingWorkerBatchSize,
+			cfg.ImageProcessingWorkerFlushInterval,
+			cfg.PhotoUploadStatusTTL,
+		)
+
+		for i := 0; i < cfg.ImageProcessingWorkerConcurrency; i++ {
+			consumerName := fmt.Sprintf("photo-worker-%d", i+1)
+			go worker.Run(workerCtx, consumerName)
+		}
+
+		log.Printf("image processing worker enabled")
+	}
+
 	authService := user.NewAuthService(userRepo, refreshRepo, tokenManager)
 	userService := user.NewUserService(userRepo)
 	competitionService := competitiondomain.NewService(competitionRepo, coverStorage)
 	accessService := accessdomain.NewService(accessRepo, competitionRepo)
 	photoService := photodomain.NewService(
 		photoRepo,
-		imageProcessor,
+		localImageProcessor,
 		photoStorage,
 		accessService,
 		competitionRepo,
@@ -173,7 +240,7 @@ func main() {
 	userHandler := handlers.NewUserHandler(userService)
 	competitionHandler := handlers.NewCompetitionHandler(competitionService)
 	accessHandler := handlers.NewAccessHandler(accessService)
-	photoHandler := handlers.NewPhotoHandler(photoService)
+	photoHandler := handlers.NewPhotoHandler(photoService, asyncUploadService)
 
 	authMiddleware := middleware.NewAuthMiddleware(tokenManager, userRepo)
 

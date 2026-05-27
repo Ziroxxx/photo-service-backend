@@ -39,3 +39,21 @@ type AddBibRequest struct {
 type DownloadPhotosRequest struct {
 	PhotoIDs []uuid.UUID `json:"photoIds" binding:"required"`
 }
+
+type AsyncUploadPhotosResult struct {
+	UploadID string                  `json:"uploadId"`
+	Accepted int                     `json:"accepted"`
+	Failed   []UploadPhotoItemResult `json:"failed"`
+	Status   string                  `json:"status"`
+}
+
+type UploadStatusResult struct {
+	UploadID   string `json:"uploadId"`
+	Total      int64  `json:"total"`
+	Uploaded   int64  `json:"uploaded"`
+	Queued     int64  `json:"queued"`
+	Processing int64  `json:"processing"`
+	Completed  int64  `json:"completed"`
+	Failed     int64  `json:"failed"`
+	Status     string `json:"status"`
+}

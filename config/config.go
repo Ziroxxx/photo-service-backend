@@ -43,6 +43,18 @@ type Config struct {
 	ImageProcessingBatchSize        int
 	ImageProcessingPresignedTTL     time.Duration
 	ImageProcessingWatermarkOpacity float64
+	RedisAddr     string
+	RedisPassword string
+	RedisDB       int
+
+	PhotoUploadAsync         bool
+	PhotoUploadChunkMaxFiles int
+	PhotoUploadStatusTTL     time.Duration
+
+	ImageProcessingWorkerEnabled       bool
+	ImageProcessingWorkerBatchSize     int
+	ImageProcessingWorkerFlushInterval time.Duration
+	ImageProcessingWorkerConcurrency   int
 }
 
 func MustLoad() Config {
@@ -81,6 +93,19 @@ func MustLoad() Config {
 		ImageProcessingBatchSize:        getEnvInt("IMAGE_PROCESSING_BATCH_SIZE", 25),
 		ImageProcessingPresignedTTL:     getEnvDuration("IMAGE_PROCESSING_PRESIGNED_URL_TTL", 10*time.Minute),
 		ImageProcessingWatermarkOpacity: getEnvFloat("IMAGE_PROCESSING_WATERMARK_OPACITY", 1),
+
+		RedisAddr:     getEnv("REDIS_ADDR", "localhost:6379"),
+		RedisPassword: getEnv("REDIS_PASSWORD", ""),
+		RedisDB:       getEnvInt("REDIS_DB", 0),
+
+		PhotoUploadAsync:         getEnvBool("PHOTO_UPLOAD_ASYNC", false),
+		PhotoUploadChunkMaxFiles: getEnvInt("PHOTO_UPLOAD_CHUNK_MAX_FILES", 200),
+		PhotoUploadStatusTTL:     getEnvDuration("PHOTO_UPLOAD_STATUS_TTL", 24*time.Hour),
+
+		ImageProcessingWorkerEnabled:       getEnvBool("IMAGE_PROCESSING_WORKER_ENABLED", false),
+		ImageProcessingWorkerBatchSize:     getEnvInt("IMAGE_PROCESSING_WORKER_BATCH_SIZE", 500),
+		ImageProcessingWorkerFlushInterval: getEnvDuration("IMAGE_PROCESSING_WORKER_FLUSH_INTERVAL", 2*time.Second),
+		ImageProcessingWorkerConcurrency:   getEnvInt("IMAGE_PROCESSING_WORKER_CONCURRENCY", 1),
 	}
 }
 

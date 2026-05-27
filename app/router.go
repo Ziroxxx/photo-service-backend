@@ -91,6 +91,11 @@ func RegisterRoutes(r *gin.Engine, d HTTPDeps) {
 			photos.POST("/download", d.PhotoHandler.DownloadPhotos)
 		}
 
+		uploads := api.Group("/uploads")
+		{
+			uploads.GET("/:uploadId/status", d.PhotoHandler.GetUploadStatus)
+		}
+
 		tech := api.Group("/tech")
 		tech.Use(middleware.RequireRoles(user.RoleAdmin))
 		{

@@ -23,6 +23,7 @@ type ProcessInput struct {
 
 	OriginalBucket    string
 	OriginalObjectKey string
+	OriginalSizeBytes int64
 
 	DerivedBucket        string
 	PreviewObjectKey     string

@@ -190,8 +190,9 @@ func (p *CudaBatchProcessor) ProcessBatch(
 			return nil, fmt.Errorf("cuda failed for %s: %s", item.PhotoID, item.Error)
 		}
 
-		originalSize := int64(0)
-		if input.SourcePath != "" {
+		originalSize := input.OriginalSizeBytes
+
+		if originalSize <= 0 && input.SourcePath != "" {
 			if stat, err := os.Stat(input.SourcePath); err == nil {
 				originalSize = stat.Size()
 			}

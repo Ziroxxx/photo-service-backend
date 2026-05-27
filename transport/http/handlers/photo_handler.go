@@ -18,11 +18,15 @@ import (
 )
 
 type PhotoHandler struct {
-	svc *photo.Service
+	svc      *photo.Service
+	asyncSvc *photo.AsyncUploadService
 }
 
-func NewPhotoHandler(svc *photo.Service) *PhotoHandler {
-	return &PhotoHandler{svc: svc}
+func NewPhotoHandler(svc *photo.Service, asyncSvc *photo.AsyncUploadService) *PhotoHandler {
+	return &PhotoHandler{
+		svc:      svc,
+		asyncSvc: asyncSvc,
+	}
 }
 
 func (h *PhotoHandler) ListCompetitionPhotos(c *gin.Context) {
@@ -121,6 +125,27 @@ func (h *PhotoHandler) UploadPhotos(c *gin.Context) {
 				return fileHeader.Open()
 			},
 		})
+	}
+
+	if h.asyncSvc != nil {
+		uploadID := strings.TrimSpace(c.Query("uploadId"))
+
+		out, err := h.asyncSvc.EnqueueUploads(
+			c.Request.Context(),
+			currentUser.ID,
+			currentUser.Role,
+			competitionID,
+			req.StageID,
+			uploadID,
+			files,
+		)
+		if err != nil {
+			writePhotoError(c, err)
+			return
+		}
+
+		c.JSON(http.StatusAccepted, out)
+		return
 	}
 
 	out, err := h.svc.UploadPhotos(c.Request.Context(), currentUser.ID, currentUser.Role, competitionID, req, files)
@@ -398,4 +423,25 @@ func writePhotoError(c *gin.Context, err error) {
 	default:
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
 	}
+}
+
+func (h *PhotoHandler) GetUploadStatus(c *gin.Context) {
+	if h.asyncSvc == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "async upload is disabled"})
+		return
+	}
+
+	uploadID := strings.TrimSpace(c.Param("uploadId"))
+	if uploadID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid upload id"})
+		return
+	}
+
+	out, err := h.asyncSvc.GetStatus(c.Request.Context(), uploadID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, out)
 }
